@@ -12,6 +12,11 @@
 // Maximum frame size we will copy.  Frames larger than this are truncated.
 #define MAX_FRAME 2048
 
+// SKB mark used by the userspace AF_PACKET injection socket.  Frames carrying
+// this mark were injected by us and must not be re-forwarded into the tunnel.
+// Must match INJECTED_MARK in include/iface_capture.h.
+#define INJECTED_MARK 0xFB01
+
 // Per-CPU scratch buffer.  The BPF stack is limited to 512 bytes so we cannot
 // keep a 2048-byte frame buffer there.  A per-CPU array gives us one slot per
 // CPU with no lock contention.
@@ -31,6 +36,10 @@ struct {
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
+    // Skip frames injected by our AF_PACKET socket to prevent a loop.
+    if (skb->mark == INJECTED_MARK)
+        return TC_ACT_OK;
+
     __u32 key = 0;
     __u8 *buf = bpf_map_lookup_elem(&scratch, &key);
     if (!buf)

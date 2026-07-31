@@ -84,9 +84,11 @@ IfaceCapture::IfaceCapture(const std::string& iface,
     if (raw_fd_ < 0)
         ic_throw("socket(AF_PACKET)");
 
-    // Bind to the named interface so sendto() with a null address works via
-    // send() after binding.  We use sendto with a sockaddr_ll instead.
-    // (No bind needed for TX-only use with sendto.)
+    // Mark every frame sent from this socket so the TC egress BPF program can
+    // identify and skip them, preventing a forwarding loop.
+    uint32_t mark = INJECTED_MARK;
+    if (setsockopt(raw_fd_, SOL_SOCKET, SO_MARK, &mark, sizeof(mark)) != 0)
+        ic_throw("setsockopt(SO_MARK)");
 }
 
 // ── Destructor ───────────────────────────────────────────────────────────────

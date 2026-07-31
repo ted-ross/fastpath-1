@@ -6,6 +6,12 @@
 #include <functional>
 #include <string>
 
+// SKB mark stamped on every frame sent via the AF_PACKET injection socket.
+// The TC egress BPF program checks this value and skips such frames so they
+// are not re-forwarded into the UDP tunnel (forwarding-loop prevention).
+// Must match INJECTED_MARK in bpf/xdp_prog.bpf.c.
+#define INJECTED_MARK 0xFB01u
+
 // ── IfaceCapture ──────────────────────────────────────────────────────────────
 //
 // Attaches a TC egress BPF program to a named interface that copies every
