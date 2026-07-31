@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""UDP listener — prints packet length and hex dump of every received datagram."""
+"""UDP listener — prints packet length and hex dump of every received datagram.
+
+Each received UDP payload is assumed to be an encapsulated IPv4 datagram.
+parse_packet() decodes and displays the inner IP header and transport layer.
+"""
 
 import argparse
 import socket
+import struct
 import sys
 
 
@@ -30,6 +35,60 @@ def hex_dump(data: bytes) -> str:
     return "\n".join(lines)
 
 
+# Symbolic names for well-known IP protocols
+_PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP"}
+
+# TCP flag bit masks and their display labels (checked high-to-low)
+_TCP_FLAGS = [
+    (0x100, "NS"),
+    (0x080, "CWR"),
+    (0x040, "ECE"),
+    (0x020, "URG"),
+    (0x010, "ACK"),
+    (0x008, "PSH"),
+    (0x004, "RST"),
+    (0x002, "SYN"),
+    (0x001, "FIN"),
+]
+
+
+def parse_packet(data: bytes) -> str:
+    """Decode an IPv4 datagram carried as the UDP payload and return a summary.
+
+    Decodes:
+      - IP source and destination addresses
+      - IP protocol number (with name for ICMP/TCP/UDP)
+      - TCP/UDP source and destination ports
+      - TCP flags (when protocol is TCP)
+    """
+    if len(data) < 20:
+        return f"[too short for IPv4 header: {len(data)} bytes]"
+
+    ihl = (data[0] & 0x0F) * 4   # IP header length in bytes
+    proto_num = data[9]
+    src_ip = socket.inet_ntoa(data[12:16])
+    dst_ip = socket.inet_ntoa(data[16:20])
+    proto_name = _PROTO_NAMES.get(proto_num, f"proto={proto_num}")
+
+    transport = data[ihl:]
+
+    if proto_num == 6:  # TCP
+        if len(transport) < 20:
+            return f"{src_ip} -> {dst_ip}  {proto_name}  [truncated TCP header]"
+        src_port, dst_port, _, _, data_off_flags = struct.unpack_from("!HHIIH", transport)
+        flags = data_off_flags & 0x1FF
+        flag_str = "|".join(name for mask, name in _TCP_FLAGS if flags & mask) or "none"
+        return f"{src_ip}:{src_port} -> {dst_ip}:{dst_port}  {proto_name}  flags=[{flag_str}]"
+
+    if proto_num == 17:  # UDP
+        if len(transport) < 4:
+            return f"{src_ip} -> {dst_ip}  {proto_name}  [truncated UDP header]"
+        src_port, dst_port = struct.unpack_from("!HH", transport)
+        return f"{src_ip}:{src_port} -> {dst_ip}:{dst_port}  {proto_name}"
+
+    return f"{src_ip} -> {dst_ip}  {proto_name}"
+
+
 def main() -> None:
     port = parse_args()
 
@@ -46,7 +105,8 @@ def main() -> None:
         while True:
             data, addr = sock.recvfrom(65535)
             print(f"\nReceived {len(data)} bytes from {addr}")
-            print(hex_dump(data))
+            print(parse_packet(data))
+#            print(hex_dump(data))
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
