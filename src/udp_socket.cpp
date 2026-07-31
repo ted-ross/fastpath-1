@@ -106,6 +106,7 @@ UdpReceiver::~UdpReceiver()
 
 ssize_t UdpReceiver::recv(uint8_t* buf, size_t buflen)
 {
+    std::cout << "Recv: length=" << buflen << "\n";
     ssize_t n = ::recv(fd_, buf, buflen, MSG_DONTWAIT);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
