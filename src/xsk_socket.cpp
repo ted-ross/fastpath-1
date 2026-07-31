@@ -207,11 +207,11 @@ void XskSocket::load_and_attach_xdp(const std::string& bpf_obj_path)
     }
 
     struct bpf_program* prog =
-        bpf_object__find_program_by_name(obj, "xdp_prog");
+        bpf_object__find_program_by_name(obj, "xdp_ingress");
     if (!prog) {
         bpf_object__close(obj);
         throw std::runtime_error(
-            "BPF program 'xdp_prog' not found in " + bpf_obj_path);
+            "BPF program 'xdp_ingress' not found in " + bpf_obj_path);
     }
 
     int prog_fd = bpf_program__fd(prog);

@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// TC egress program: copy every outgoing frame into a BPF ring buffer so
-// userspace can read it, then let the frame continue normally (TC_ACT_OK).
+// Combined BPF object for the fastpath dataplane:
 //
-// Attached with bpf_tc_attach() to the egress hook of the named interface.
+//   tc_egress  — TC egress hook: copies every outgoing frame into a ring
+//                buffer so userspace can forward it over the UDP tunnel.
+//
+//   xdp_ingress — XDP ingress hook: redirects every incoming frame into the
+//                 AF_XDP socket (xsk_map[0]) so the kernel IP stack receives
+//                 it as if it arrived from the wire.
 
 #include <linux/bpf.h>
 #include <linux/pkt_cls.h>
@@ -61,6 +65,26 @@ int tc_egress(struct __sk_buff *skb)
 
 out:
     return TC_ACT_OK;   // always let the original packet through
+}
+
+// ── XDP ingress: redirect into AF_XDP socket ──────────────────────────────────
+//
+// One-entry XSKMAP: userspace registers the AF_XDP socket fd at key 0 after
+// opening the socket.  All ingress frames are redirected there so the kernel
+// network stack receives them.
+
+struct {
+    __uint(type,        BPF_MAP_TYPE_XSKMAP);
+    __uint(max_entries, 1);
+    __type(key,         __u32);
+    __type(value,       __u32);
+} xsk_map SEC(".maps");
+
+SEC("xdp")
+int xdp_ingress(struct xdp_md *ctx)
+{
+    __u32 key = 0;
+    return bpf_redirect_map(&xsk_map, key, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";
