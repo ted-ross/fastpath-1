@@ -46,7 +46,6 @@ set(CPP_SOURCES
     src/config.cpp
     src/iface_capture.cpp
     src/udp_socket.cpp
-    src/xsk_socket.cpp
 )
 
 add_executable(dataplane ${CPP_SOURCES})

@@ -6,18 +6,12 @@
 #include <functional>
 #include <string>
 
-// SKB mark stamped on every frame sent via the AF_PACKET injection socket.
-// The TC egress BPF program checks this value and skips such frames so they
-// are not re-forwarded into the UDP tunnel (forwarding-loop prevention).
-// Must match INJECTED_MARK in bpf/xdp_prog.bpf.c.
-#define INJECTED_MARK 0xFB01u
-
 // ── IfaceCapture ──────────────────────────────────────────────────────────────
 //
-// Attaches a TC egress BPF program to a named interface that copies every
-// outgoing frame into a BPF ring buffer.  Userspace reads frames via the
-// ring_buffer consumer callback.  Frames are injected back into the interface
-// via a raw AF_PACKET socket (layer-2 injection).
+// Attaches a TC egress BPF program to a named TUN interface that copies every
+// outgoing IP packet into a BPF ring buffer.  Userspace reads frames via the
+// ring_buffer consumer callback.  Packets are injected into the kernel IP
+// stack by writing to the TUN fd (ingress path — no copy overhead on egress).
 //
 class IfaceCapture {
 public:
@@ -43,7 +37,7 @@ public:
 private:
     std::string    iface_;
     int            ifindex_  = -1;
-    int            raw_fd_   = -1;   // AF_PACKET SOCK_RAW for TX injection
+    int            tun_fd_   = -1;   // /dev/net/tun fd for ingress injection
 
     struct bpf_object*   obj_      = nullptr;
     struct ring_buffer*  ringbuf_  = nullptr;

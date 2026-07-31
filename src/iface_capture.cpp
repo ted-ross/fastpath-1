@@ -2,10 +2,11 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <linux/if_packet.h>
-#include <linux/if_ether.h>
+#include <linux/if_tun.h>
 #include <net/if.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -79,23 +80,30 @@ IfaceCapture::IfaceCapture(const std::string& iface,
     if (!ringbuf_)
         ic_throw("ring_buffer__new");
 
-    // ── AF_PACKET raw socket for layer-2 TX injection ─────────────────────────
-    raw_fd_ = socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, 0);
-    if (raw_fd_ < 0)
-        ic_throw("socket(AF_PACKET)");
+    // ── TUN fd for ingress injection ──────────────────────────────────────────
+    // Opening /dev/net/tun and attaching to the named TUN interface gives a fd
+    // where write() delivers an IP packet directly into the kernel IP stack —
+    // the same interface the TC egress hook is watching.  IFF_NO_PI suppresses
+    // the 4-byte packet-info header so we can write raw IP PDUs directly.
+    tun_fd_ = open("/dev/net/tun", O_RDWR | O_CLOEXEC);
+    if (tun_fd_ < 0)
+        ic_throw("open(/dev/net/tun)");
 
-    // Mark every frame sent from this socket so the TC egress BPF program can
-    // identify and skip them, preventing a forwarding loop.
-    uint32_t mark = INJECTED_MARK;
-    if (setsockopt(raw_fd_, SOL_SOCKET, SO_MARK, &mark, sizeof(mark)) != 0)
-        ic_throw("setsockopt(SO_MARK)");
+    struct ifreq ifr{};
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+    std::strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ - 1);
+    if (ioctl(tun_fd_, TUNSETIFF, &ifr) < 0) {
+        close(tun_fd_);
+        tun_fd_ = -1;
+        ic_throw("ioctl(TUNSETIFF, " + iface + ")");
+    }
 }
 
 // ── Destructor ───────────────────────────────────────────────────────────────
 
 IfaceCapture::~IfaceCapture()
 {
-    if (raw_fd_ >= 0) close(raw_fd_);
+    if (tun_fd_ >= 0) close(tun_fd_);
 
     if (ringbuf_) ring_buffer__free(ringbuf_);
 
@@ -141,21 +149,12 @@ int IfaceCapture::consume()
     return ring_buffer__consume(ringbuf_);
 }
 
-// ── TX injection ─────────────────────────────────────────────────────────────
+// ── Ingress injection ─────────────────────────────────────────────────────────
 
 bool IfaceCapture::send_frame(const uint8_t* data, uint32_t len)
 {
-    struct sockaddr_ll addr{};
-    addr.sll_family   = AF_PACKET;
-    addr.sll_ifindex  = ifindex_;
-    addr.sll_protocol = 0;   // ignored on TX; protocol comes from the frame itself
-    addr.sll_halen    = ETH_ALEN;
-    // Destination MAC is embedded in the frame — copy first 6 bytes.
-    if (len >= ETH_ALEN)
-        std::memcpy(addr.sll_addr, data, ETH_ALEN);
-
-    ssize_t n = sendto(raw_fd_, data, len, 0,
-                       reinterpret_cast<struct sockaddr*>(&addr),
-                       sizeof(addr));
+    // Write the raw IP packet to the TUN fd.  The kernel treats this exactly
+    // as an incoming packet on the interface — routing, ICMP, TCP all work.
+    ssize_t n = write(tun_fd_, data, len);
     return n == static_cast<ssize_t>(len);
 }
