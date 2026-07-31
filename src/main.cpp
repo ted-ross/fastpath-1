@@ -1,6 +1,7 @@
 #include "config.h"
 #include "iface_capture.h"
 #include "udp_socket.h"
+#include "xsk_socket.h"
 
 #include <poll.h>
 #include <signal.h>
@@ -62,7 +63,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // ── TC egress capture + AF_PACKET injector ────────────────────────────────
+    // ── TC egress capture ─────────────────────────────────────────────────────
     IfaceCapture* cap = nullptr;
     try {
         cap = new IfaceCapture(
@@ -75,6 +76,21 @@ int main(int argc, char** argv)
         );
     } catch (const std::exception& e) {
         fprintf(stderr, "error: TC capture init failed: %s\n", e.what());
+        delete sender;
+        delete receiver;
+        return 1;
+    }
+
+    // ── AF_XDP socket for ingress injection ───────────────────────────────────
+    // Frames received from the UDP tunnel are written into the XSK TX ring.
+    // The XDP program redirects them via xsk_map into the kernel ingress path,
+    // so the IP stack sees them as packets arriving on the interface.
+    XskSocket* xsk = nullptr;
+    try {
+        xsk = new XskSocket(cfg.iface, BPF_OBJ_PATH);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "error: XSK socket init failed: %s\n", e.what());
+        delete cap;
         delete sender;
         delete receiver;
         return 1;
@@ -106,15 +122,16 @@ int main(int argc, char** argv)
         if (pfds[0].revents & POLLIN)
             cap->consume();   // invokes frame_cb for each queued frame
 
-        // ── UDP tunnel → interface injection ─────────────────────────────────
+        // ── UDP tunnel → ingress injection via AF_XDP ─────────────────────────
         if (pfds[1].revents & POLLIN) {
+            xsk->drain_tx_completions();
             while (true) {
                 ssize_t n = receiver->recv(udp_buf, sizeof(udp_buf));
                 if (n <= 0) break;
-                if (cap->send_frame(udp_buf, static_cast<uint32_t>(n)))
+                if (xsk->send_frame(udp_buf, static_cast<uint32_t>(n)))
                     ++tx_packets;
                 else
-                    fprintf(stderr, "warning: AF_PACKET send failed\n");
+                    fprintf(stderr, "warning: XSK send failed (no free frames)\n");
             }
         }
     }
@@ -124,6 +141,7 @@ int main(int argc, char** argv)
             "  tx_packets=%" PRIu64 "\n",
             rx_packets, tx_packets);
 
+    delete xsk;
     delete cap;       // detaches TC filter
     delete receiver;
     delete sender;
