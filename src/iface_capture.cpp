@@ -6,6 +6,7 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <cstdio>
 
 static void ic_throw(const std::string& msg, int err = errno)
 {
@@ -128,14 +130,44 @@ IfaceCapture::~IfaceCapture()
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Log a one-line summary of an IP packet (IPv4 only) for debugging.
+static void log_packet(const char* direction, const uint8_t* data, uint32_t len)
+{
+    if (len < 20) {
+        fprintf(stderr, "dbg: %s  [%u bytes, too short for IPv4]\n", direction, len);
+        return;
+    }
+    uint8_t  proto = data[9];
+    char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, data + 12, src, sizeof(src));
+    inet_ntop(AF_INET, data + 16, dst, sizeof(dst));
+
+    if (proto == 6 && len >= (uint32_t)((data[0] & 0x0f) * 4) + 14u) {  // TCP
+        const uint8_t* tcp = data + ((data[0] & 0x0f) * 4);
+        uint16_t sport = (uint16_t)(tcp[0] << 8 | tcp[1]);
+        uint16_t dport = (uint16_t)(tcp[2] << 8 | tcp[3]);
+        uint8_t  flags = tcp[13];
+        fprintf(stderr, "dbg: %s  TCP  %s:%u -> %s:%u  flags=0x%02x\n",
+                direction, src, sport, dst, dport, flags);
+    } else if (proto == 1) {                        // ICMP
+        fprintf(stderr, "dbg: %s  ICMP  %s -> %s\n", direction, src, dst);
+    } else {
+        fprintf(stderr, "dbg: %s  proto=%u  %s -> %s  [%u bytes]\n",
+                direction, proto, src, dst, len);
+    }
+}
+
 // ── Ring buffer glue ──────────────────────────────────────────────────────────
 
 // Static trampoline: libbpf calls this; we forward to the instance callback.
 int IfaceCapture::ringbuf_cb(void* ctx, void* data, size_t size)
 {
     auto* self = static_cast<IfaceCapture*>(ctx);
-    self->frame_cb_(static_cast<const uint8_t*>(data),
-                    static_cast<uint32_t>(size));
+    const uint8_t* pkt = static_cast<const uint8_t*>(data);
+    log_packet("TC-egress ", pkt, static_cast<uint32_t>(size));
+    self->frame_cb_(pkt, static_cast<uint32_t>(size));
     return 0;
 }
 
@@ -153,8 +185,12 @@ int IfaceCapture::consume()
 
 bool IfaceCapture::send_frame(const uint8_t* data, uint32_t len)
 {
-    // Write the raw IP packet to the TUN fd.  The kernel treats this exactly
-    // as an incoming packet on the interface — routing, ICMP, TCP all work.
+    log_packet("TUN-inject", data, len);
     ssize_t n = write(tun_fd_, data, len);
-    return n == static_cast<ssize_t>(len);
+    if (n != static_cast<ssize_t>(len)) {
+        fprintf(stderr, "dbg: TUN-inject write returned %zd (errno=%d %s)\n",
+                n, errno, strerror(errno));
+        return false;
+    }
+    return true;
 }
