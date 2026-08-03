@@ -58,12 +58,22 @@ IfaceCapture::IfaceCapture(const std::string& iface,
         .attach_point = BPF_TC_EGRESS,
     );
 
-    // bpf_tc_hook_create returns -EEXIST if clsact is already present — that
-    // is fine, we just reuse the existing one.
+    // Destroy any pre-existing clsact qdisc on this interface (e.g. left behind
+    // by a previous crashed run) before creating a fresh one.  We must use the
+    // combined INGRESS|EGRESS attach_point for the destroy call, then restore
+    // EGRESS for the create/attach calls that follow.
+    {
+        LIBBPF_OPTS(bpf_tc_hook, destroy_hook,
+            .ifindex      = ifindex_,
+            .attach_point = static_cast<bpf_tc_attach_point>(BPF_TC_INGRESS | BPF_TC_EGRESS),
+        );
+        bpf_tc_hook_destroy(&destroy_hook);   // ignore error — may not exist
+    }
+
     int ret = bpf_tc_hook_create(&hook);
     if (ret != 0 && ret != -EEXIST)
         ic_throw("bpf_tc_hook_create", -ret);
-    tc_hook_created_ = (ret == 0);
+    tc_hook_created_ = true;   // we always own the hook now
 
     LIBBPF_OPTS(bpf_tc_opts, opts,
         .prog_fd = prog_fd,
