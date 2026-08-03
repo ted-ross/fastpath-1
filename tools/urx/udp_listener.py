@@ -94,12 +94,12 @@ def main() -> None:
 
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("127.0.0.1", port))
+        sock.bind(("0.0.0.0", port))
     except OSError as exc:
-        print(f"Error: could not bind to 127.0.0.1:{port} — {exc}", file=sys.stderr)
+        print(f"Error: could not bind to 0.0.0.0:{port} — {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Listening on UDP 127.0.0.1:{port}")
+    print(f"Listening on UDP 0.0.0.0:{port}")
 
     try:
         while True:

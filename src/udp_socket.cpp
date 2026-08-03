@@ -71,7 +71,6 @@ ssize_t UdpSender::send(const uint8_t* data, size_t len)
             return -1;
         udp_throw("send(UDP)");
     }
-    std::cout << "    return: " << n << "\n";
     return n;
 }
 

@@ -45,6 +45,16 @@ int tc_egress(struct __sk_buff *skb)
     if (len == 0)
         goto out;
 
+    // Force the kernel to compute any pending partial checksum (CHECKSUM_PARTIAL)
+    // before we copy the bytes.  Without this, TCP segments captured here carry
+    // only the pseudo-header checksum in the TCP checksum field; the real value
+    // is never filled in because a TUN device has no hardware offload engine.
+    // The remote side then injects a packet with a bad checksum and the kernel
+    // silently drops it — ICMP works because its checksum is always finalised in
+    // software before reaching this hook, but TCP does not.
+    if (bpf_skb_pull_data(skb, len) != 0)
+        goto out;
+
     if (bpf_skb_load_bytes(skb, 0, buf, len) != 0)
         goto out;
 
