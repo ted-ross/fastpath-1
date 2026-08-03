@@ -45,8 +45,9 @@ private:
     // TC hook tracking (for cleanup)
     bool           tc_hook_created_ = false;
 
-    // Saved rp_filter value for the interface, restored on destruction.
-    int            rp_filter_orig_  = -1;
+    // Saved rp_filter values (per-interface and all), restored on destruction.
+    int            rp_filter_orig_     = -1;
+    int            rp_filter_all_orig_ = -1;
 
     static int ringbuf_cb(void* ctx, void* data, size_t size);
     FrameCallback  frame_cb_;

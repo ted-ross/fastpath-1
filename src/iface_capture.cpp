@@ -94,34 +94,27 @@ IfaceCapture::IfaceCapture(const std::string& iface,
 
     // ── Disable rp_filter on the TUN interface ────────────────────────────────
     // Packets injected via write(tun_fd_) arrive on this interface with a source
-    // address belonging to the remote tunnel peer.  With rp_filter=1 or =2 the
-    // kernel performs a reverse-path check: if the best route back to that source
-    // does not exit through this same interface, the packet is silently dropped
-    // before any TCP/IP processing occurs.  Since the peer's address space is
-    // reachable only through this tunnel (by definition), the check would pass —
-    // but net.ipv4.conf.all.rp_filter=2 (strict) overrides the per-interface
-    // setting as max(all, iface), so we must set the interface value to 0 to
-    // ensure injected packets are not dropped.  The original value is restored
-    // in the destructor.
-    {
-        std::string sysctl_path = "/proc/sys/net/ipv4/conf/" + iface + "/rp_filter";
-        // Read current value.
-        FILE* f = fopen(sysctl_path.c_str(), "r");
+    // address belonging to the remote tunnel peer.  The kernel applies reverse-
+    // path filtering using the effective value max(all, iface).  Even if the
+    // per-interface value is 0, net.ipv4.conf.all.rp_filter=2 still enforces
+    // strict mode.  We must zero both knobs so injected packets are not silently
+    // dropped before the IP stack processes them.  Both values are restored in
+    // the destructor.
+    auto rp_set = [&](const std::string& path, int& saved) {
+        FILE* f = fopen(path.c_str(), "r");
         if (f) {
             int val = 0;
-            if (fscanf(f, "%d", &val) == 1)
-                rp_filter_orig_ = val;
+            if (fscanf(f, "%d", &val) == 1) saved = val;
             fclose(f);
         }
-        // Write 0 to disable reverse-path filtering for injected packets.
-        f = fopen(sysctl_path.c_str(), "w");
-        if (!f)
-            ic_throw("fopen(" + sysctl_path + " for write)");
+        f = fopen(path.c_str(), "w");
+        if (!f) ic_throw("fopen(" + path + " for write)");
         fprintf(f, "0\n");
         fclose(f);
-        fprintf(stderr, "dataplane: set %s = 0 (was %d)\n",
-                sysctl_path.c_str(), rp_filter_orig_);
-    }
+        fprintf(stderr, "dataplane: set %s = 0 (was %d)\n", path.c_str(), saved);
+    };
+    rp_set("/proc/sys/net/ipv4/conf/" + iface + "/rp_filter", rp_filter_orig_);
+    rp_set("/proc/sys/net/ipv4/conf/all/rp_filter",            rp_filter_all_orig_);
 
     // ── TUN fd for ingress injection ──────────────────────────────────────────
     // Opening /dev/net/tun and attaching to the named TUN interface gives a fd
@@ -148,15 +141,14 @@ IfaceCapture::~IfaceCapture()
 {
     if (tun_fd_ >= 0) close(tun_fd_);
 
-    // Restore rp_filter to its original value.
-    if (rp_filter_orig_ >= 0) {
-        std::string sysctl_path = "/proc/sys/net/ipv4/conf/" + iface_ + "/rp_filter";
-        FILE* f = fopen(sysctl_path.c_str(), "w");
-        if (f) {
-            fprintf(f, "%d\n", rp_filter_orig_);
-            fclose(f);
-        }
-    }
+    // Restore rp_filter to its original values.
+    auto rp_restore = [](const std::string& path, int saved) {
+        if (saved < 0) return;
+        FILE* f = fopen(path.c_str(), "w");
+        if (f) { fprintf(f, "%d\n", saved); fclose(f); }
+    };
+    rp_restore("/proc/sys/net/ipv4/conf/" + iface_ + "/rp_filter", rp_filter_orig_);
+    rp_restore("/proc/sys/net/ipv4/conf/all/rp_filter",             rp_filter_all_orig_);
 
     if (ringbuf_) ring_buffer__free(ringbuf_);
 
