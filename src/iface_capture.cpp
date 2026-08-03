@@ -92,6 +92,37 @@ IfaceCapture::IfaceCapture(const std::string& iface,
     if (!ringbuf_)
         ic_throw("ring_buffer__new");
 
+    // ── Disable rp_filter on the TUN interface ────────────────────────────────
+    // Packets injected via write(tun_fd_) arrive on this interface with a source
+    // address belonging to the remote tunnel peer.  With rp_filter=1 or =2 the
+    // kernel performs a reverse-path check: if the best route back to that source
+    // does not exit through this same interface, the packet is silently dropped
+    // before any TCP/IP processing occurs.  Since the peer's address space is
+    // reachable only through this tunnel (by definition), the check would pass —
+    // but net.ipv4.conf.all.rp_filter=2 (strict) overrides the per-interface
+    // setting as max(all, iface), so we must set the interface value to 0 to
+    // ensure injected packets are not dropped.  The original value is restored
+    // in the destructor.
+    {
+        std::string sysctl_path = "/proc/sys/net/ipv4/conf/" + iface + "/rp_filter";
+        // Read current value.
+        FILE* f = fopen(sysctl_path.c_str(), "r");
+        if (f) {
+            int val = 0;
+            if (fscanf(f, "%d", &val) == 1)
+                rp_filter_orig_ = val;
+            fclose(f);
+        }
+        // Write 0 to disable reverse-path filtering for injected packets.
+        f = fopen(sysctl_path.c_str(), "w");
+        if (!f)
+            ic_throw("fopen(" + sysctl_path + " for write)");
+        fprintf(f, "0\n");
+        fclose(f);
+        fprintf(stderr, "dataplane: set %s = 0 (was %d)\n",
+                sysctl_path.c_str(), rp_filter_orig_);
+    }
+
     // ── TUN fd for ingress injection ──────────────────────────────────────────
     // Opening /dev/net/tun and attaching to the named TUN interface gives a fd
     // where write() delivers an IP packet directly into the kernel IP stack —
@@ -116,6 +147,16 @@ IfaceCapture::IfaceCapture(const std::string& iface,
 IfaceCapture::~IfaceCapture()
 {
     if (tun_fd_ >= 0) close(tun_fd_);
+
+    // Restore rp_filter to its original value.
+    if (rp_filter_orig_ >= 0) {
+        std::string sysctl_path = "/proc/sys/net/ipv4/conf/" + iface_ + "/rp_filter";
+        FILE* f = fopen(sysctl_path.c_str(), "w");
+        if (f) {
+            fprintf(f, "%d\n", rp_filter_orig_);
+            fclose(f);
+        }
+    }
 
     if (ringbuf_) ring_buffer__free(ringbuf_);
 
