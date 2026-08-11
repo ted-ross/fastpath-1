@@ -9,6 +9,7 @@
 #include <linux/if_packet.h>
 #include <arpa/inet.h>
 #include <net/ethernet.h>
+#include <netinet/ip.h>
 
 /// Ethernet header + maximum IPv4 payload within a 1500-byte MTU.
 static constexpr int ETH_FRAME_MAX = 1514;  // 14-byte header + 1500-byte payload
@@ -17,7 +18,8 @@ static constexpr int ETH_FRAME_MAX = 1514;  // 14-byte header + 1500-byte payloa
 // Outbound: veth1 → UDP peer
 // ---------------------------------------------------------------------------
 
-void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer)
+void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
+                      bool debug)
 {
     uint8_t buf[ETH_FRAME_MAX];
 
@@ -42,6 +44,15 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer)
     const uint8_t* ip_payload = buf + sizeof(struct ethhdr);
     ssize_t        ip_len     = n - static_cast<ssize_t>(sizeof(struct ethhdr));
 
+    if (debug) {
+        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_payload);
+        char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &iph->saddr, src, sizeof(src));
+        inet_ntop(AF_INET, &iph->daddr, dst, sizeof(dst));
+        std::cout << "[debug] veth1 RX  " << ip_len
+                  << " bytes  src=" << src << " dst=" << dst << "\n";
+    }
+
     ssize_t sent = sendto(udp_fd,
                           ip_payload,
                           static_cast<size_t>(ip_len),
@@ -58,7 +69,7 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer)
 // ---------------------------------------------------------------------------
 
 void handle_udp_input(int udp_fd, int raw_fd,
-                      int iface_index, const uint8_t mac[6])
+                      int iface_index, const uint8_t mac[6], bool debug)
 {
     // Reserve space at the front of the buffer for the Ethernet header.
     uint8_t buf[ETH_FRAME_MAX];
@@ -74,6 +85,15 @@ void handle_udp_input(int udp_fd, int raw_fd,
     }
     if (n == 0) {
         return;
+    }
+
+    if (debug) {
+        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_area);
+        char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &iph->saddr, src, sizeof(src));
+        inet_ntop(AF_INET, &iph->daddr, dst, sizeof(dst));
+        std::cout << "[debug] veth1 TX  " << n
+                  << " bytes  src=" << src << " dst=" << dst << "\n";
     }
 
     // Build the Ethernet header in-place at the start of the buffer.

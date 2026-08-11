@@ -8,11 +8,12 @@
 static void print_usage(const char* prog)
 {
     std::cerr << "Usage: " << prog
-              << " --peer-ip <IP> --peer-port <PORT> --local-port <PORT>\n"
+              << " --peer-ip <IP> --peer-port <PORT> --local-port <PORT> [--debug]\n"
               << "\n"
               << "  --peer-ip    <IP>    IPv4 address of the remote peer\n"
               << "  --peer-port  <PORT>  UDP port on the remote peer (1-65535)\n"
-              << "  --local-port <PORT>  UDP port to listen on (1-65535)\n";
+              << "  --local-port <PORT>  UDP port to listen on (1-65535)\n"
+              << "  --debug              Enable per-packet trace logging to stdout\n";
 }
 
 static uint16_t parse_port(const char* str, const char* name)
@@ -32,6 +33,7 @@ Config parse_args(int argc, char* argv[])
         {"peer-ip",    required_argument, nullptr, 'i'},
         {"peer-port",  required_argument, nullptr, 'p'},
         {"local-port", required_argument, nullptr, 'l'},
+        {"debug",      no_argument,       nullptr, 'd'},
         {nullptr,      0,                 nullptr,  0 }
     };
 
@@ -54,6 +56,9 @@ Config parse_args(int argc, char* argv[])
             case 'l':
                 cfg.local_port = parse_port(optarg, "--local-port");
                 have_local_port = true;
+                break;
+            case 'd':
+                cfg.debug = true;
                 break;
             default:
                 print_usage(argv[0]);

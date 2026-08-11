@@ -27,7 +27,7 @@ destination MAC = veth1 MAC, EtherType = 0x0800) and the resulting frame is inje
 ## CLI Interface
 
 ```
-udp-encap --peer-ip <IP> --peer-port <PORT> --local-port <PORT>
+udp-encap --peer-ip <IP> --peer-port <PORT> --local-port <PORT> [--debug]
 ```
 
 | Argument | Description |
@@ -35,6 +35,7 @@ udp-encap --peer-ip <IP> --peer-port <PORT> --local-port <PORT>
 | `--peer-ip` | IPv4 address of the remote peer |
 | `--peer-port` | UDP port on the remote peer |
 | `--local-port` | UDP port this instance listens on |
+| `--debug` | Enable per-packet trace logging to stdout (optional) |
 
 ---
 
@@ -227,6 +228,63 @@ SIGINT / SIGTERM handlers so the program runs indefinitely and shuts down cleanl
 6. On loop exit, call `close` on both socket fds and the epoll fd.
 
 **Relevant Context:** `<sys/epoll.h>`, `<signal.h>`.
+
+**Status:** [x] done
+
+---
+
+### Sub-Task 8 — Debug Packet Trace (`--debug`)
+
+**Intent:** Add an optional `--debug` flag that, when present, prints a one-line trace
+message to stdout each time a packet enters or exits the `veth1` interface.  This must
+have zero cost when the flag is not set, so no branch overhead appears on the hot path at
+runtime unless debug mode is active.
+
+**Expected Outcomes:**
+- `Config` gains a `bool debug` field, defaulting to `false`.
+- `parse_args` recognises `--debug` (no argument) and sets `cfg.debug = true`; the usage
+  message is updated to document it.
+- `handle_raw_input` and `handle_udp_input` each accept an additional `bool debug`
+  parameter.
+- When `debug` is `true`:
+  - **Outbound** (`handle_raw_input`): after a valid IPv4 frame is accepted from `veth1`,
+    print a line of the form:
+    `[debug] veth1 RX  <ip_len> bytes  src=<src-ip> dst=<dst-ip>`
+  - **Inbound** (`handle_udp_input`): after the UDP datagram is received and before it is
+    injected into `veth1`, print a line of the form:
+    `[debug] veth1 TX  <ip_len> bytes  src=<src-ip> dst=<dst-ip>`
+- Source and destination IP addresses are decoded from the IPv4 header
+  (`struct iphdr`, offset 0 into the IP payload) using `inet_ntop`.
+- The trace output uses `std::cout` (not `std::cerr`) so it can be redirected independently
+  of warnings.
+- The debug flag is propagated from `main` to both handler call-sites in the event loop.
+
+**Todo List:**
+1. In `src/config.hpp`, add `bool debug{false};` to `struct Config`.
+2. In `src/config.cpp`:
+   a. Add a `{"debug", no_argument, nullptr, 'd'}` entry to `long_opts`.
+   b. Add a `case 'd': cfg.debug = true; break;` branch in the `getopt_long` switch.
+   c. Extend `print_usage` to document `--debug`.
+3. In `src/handlers.hpp`, add `bool debug` as the last parameter to both
+   `handle_raw_input` and `handle_udp_input`.
+4. In `src/handlers.cpp`:
+   a. Add a `<netinet/ip.h>` include for `struct iphdr`.
+   b. In `handle_raw_input`: after the EtherType check passes and `ip_payload` is set,
+      if `debug`, cast `ip_payload` to `const struct iphdr*` and print the trace line
+      using `inet_ntop` on `iphdr.saddr` / `iphdr.daddr`.
+   c. In `handle_udp_input`: after the `recvfrom` call succeeds (n > 0) and before the
+      `sendto`, if `debug`, cast `ip_area` to `const struct iphdr*` and print the trace
+      line.
+5. In `src/main.cpp`, update both handler call-sites in the event loop to pass
+   `cfg.debug` as the final argument.
+
+**Relevant Context:**
+- `struct Config` — [`src/config.hpp`](src/config.hpp)
+- `parse_args` — [`src/config.cpp`](src/config.cpp)
+- `handle_raw_input` / `handle_udp_input` signatures — [`src/handlers.hpp`](src/handlers.hpp)
+- Handler implementations — [`src/handlers.cpp`](src/handlers.cpp)
+- Event-loop call-sites — [`src/main.cpp`](src/main.cpp:94-99)
+- `struct iphdr` from `<netinet/ip.h>`, `inet_ntop` from `<arpa/inet.h>` (already included).
 
 **Status:** [x] done
 

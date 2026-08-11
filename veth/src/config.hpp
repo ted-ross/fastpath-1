@@ -5,8 +5,9 @@
 
 struct Config {
     std::string peer_ip;
-    uint16_t    peer_port;
-    uint16_t    local_port;
+    uint16_t    peer_port{0};
+    uint16_t    local_port{0};
+    bool        debug{false};
 };
 
 /// Parse and validate command-line arguments.

@@ -93,9 +93,9 @@ int main(int argc, char* argv[])
 
         for (int i = 0; i < n; ++i) {
             if (events[i].data.fd == raw.fd) {
-                handle_raw_input(raw.fd, udp.fd, udp.peer_addr);
+                handle_raw_input(raw.fd, udp.fd, udp.peer_addr, cfg.debug);
             } else if (events[i].data.fd == udp.fd) {
-                handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac);
+                handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac, cfg.debug);
             }
         }
     }
