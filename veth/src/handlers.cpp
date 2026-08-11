@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cerrno>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 
 #include <sys/socket.h>
 #include <linux/if_ether.h>
@@ -13,6 +15,18 @@
 
 /// Ethernet header + maximum IPv4 payload within a 1500-byte MTU.
 static constexpr int ETH_FRAME_MAX = 1514;  // 14-byte header + 1500-byte payload
+
+/// Format a 6-byte MAC address as "xx:xx:xx:xx:xx:xx".
+static std::string mac_to_str(const uint8_t m[ETH_ALEN])
+{
+    std::ostringstream os;
+    os << std::hex << std::setfill('0');
+    for (int i = 0; i < ETH_ALEN; ++i) {
+        if (i) os << ':';
+        os << std::setw(2) << static_cast<unsigned>(m[i]);
+    }
+    return os.str();
+}
 
 // ---------------------------------------------------------------------------
 // Outbound: veth1 → UDP peer
@@ -53,11 +67,13 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
 
     if (debug) {
         const auto* iph = reinterpret_cast<const struct iphdr*>(ip_payload);
-        char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &iph->saddr, src, sizeof(src));
-        inet_ntop(AF_INET, &iph->daddr, dst, sizeof(dst));
-        std::cout << "[debug] veth1 RX  " << ip_len
-                  << " bytes  src=" << src << " dst=" << dst << "\n";
+        char ipsrc[INET_ADDRSTRLEN], ipdst[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
+        inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
+        std::cout << "[debug] veth1 RX  " << ip_len << " bytes"
+                  << "  mac-src=" << mac_to_str(eth->h_source)
+                  << " mac-dst=" << mac_to_str(eth->h_dest)
+                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "\n";
     }
 
     ssize_t sent = sendto(udp_fd,
@@ -97,20 +113,22 @@ void handle_udp_input(int udp_fd, int raw_fd,
         return;
     }
 
-    if (debug) {
-        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_area);
-        char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &iph->saddr, src, sizeof(src));
-        inet_ntop(AF_INET, &iph->daddr, dst, sizeof(dst));
-        std::cout << "[debug] veth1 TX  " << n
-                  << " bytes  src=" << src << " dst=" << dst << "\n";
-    }
-
     // Build the Ethernet header in-place at the start of the buffer.
     auto* eth    = reinterpret_cast<struct ethhdr*>(buf);
     std::memcpy(eth->h_dest,   mac, ETH_ALEN);
     std::memcpy(eth->h_source, mac, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
+
+    if (debug) {
+        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_area);
+        char ipsrc[INET_ADDRSTRLEN], ipdst[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
+        inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
+        std::cout << "[debug] veth1 TX  " << n << " bytes"
+                  << "  mac-src=" << mac_to_str(eth->h_source)
+                  << " mac-dst=" << mac_to_str(eth->h_dest)
+                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "\n";
+    }
 
     // Addressing for AF_PACKET sendto.
     struct sockaddr_ll sa{};

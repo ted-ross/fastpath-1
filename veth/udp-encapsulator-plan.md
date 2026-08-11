@@ -185,15 +185,21 @@ socket, prepends a synthetic Ethernet MAC header, and injects the resulting fram
 **Expected Outcomes:**
 - A function `handle_udp_input(int udp_fd, int raw_fd, int iface_index, const uint8_t mac[6])`
   that performs one read/send cycle.
-- The MAC header uses the veth1 MAC as both source and destination, and EtherType
-  0x0800.
+- The Ethernet header's destination MAC (`h_dest`) **must** be the MAC address of the
+  `veth1` interface itself — resolved once at startup via `SIOCGIFHWADDR` and passed in
+  as `mac`.  It must **not** be derived from anything in the received UDP datagram (UDP
+  carries only an IP payload; there is no source MAC to borrow).
+- `h_source` is also set to the veth1 MAC (there is no peer MAC available) and
+  EtherType is 0x0800.
+- The `sockaddr_ll.sll_addr` used for the `AF_PACKET` `sendto` is likewise the veth1 MAC.
 - The assembled frame is sent via `sendto` on the raw fd using `sockaddr_ll` addressing.
 
 **Todo List:**
 1. In `handle_udp_input`, call `recvfrom` on the UDP fd into a buffer offset by
    `sizeof(ethhdr)` bytes so there is room for the header in-place.
-2. Build an `ethhdr` at the start of the buffer: copy veth1 MAC into both
-   `h_dest` and `h_source`, set `h_proto = htons(ETH_P_IP)`.
+2. Build an `ethhdr` at the start of the buffer: set `h_dest` = veth1 MAC (the `mac`
+   parameter resolved at startup), `h_source` = veth1 MAC, `h_proto = htons(ETH_P_IP)`.
+   Do **not** use any MAC address sourced from the received UDP payload.
 3. Construct a `sockaddr_ll` with `sll_ifindex = iface_index`,
    `sll_halen = ETH_ALEN`, and `sll_addr` set to the veth1 MAC.
 4. Call `sendto` on the raw fd with the full frame (header + IP payload).
