@@ -129,7 +129,7 @@ void handle_udp_input(int udp_fd, int raw_fd,
         std::cout << "[debug] veth1 TX  " << n << " bytes"
                   //<< "  mac-src=" << mac_to_str(eth->h_source)
                   //<< " mac-dst=" << mac_to_str(eth->h_dest)
-                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "proto=" << iph->protocol << "\n";
+                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << " proto=" << iph->protocol << "\n";
     }
 
     // Addressing for AF_PACKET sendto.
