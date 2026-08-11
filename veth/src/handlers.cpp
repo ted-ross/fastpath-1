@@ -33,12 +33,19 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
 
     // Need at least the 14-byte Ethernet header plus 1 byte of payload.
     if (n < static_cast<ssize_t>(sizeof(struct ethhdr) + 1)) {
+        if (debug) {
+            std::cout << "[debug] veth1 RX  dropped: runt frame (" << n << " bytes)\n";
+        }
         return;
     }
 
     const auto* eth = reinterpret_cast<const struct ethhdr*>(buf);
     if (ntohs(eth->h_proto) != ETH_P_IP) {
-        return;  // Not IPv4 — silently drop.
+        if (debug) {
+            std::cout << "[debug] veth1 RX  dropped: non-IPv4 EtherType 0x"
+                      << std::hex << ntohs(eth->h_proto) << std::dec << "\n";
+        }
+        return;
     }
 
     const uint8_t* ip_payload = buf + sizeof(struct ethhdr);
@@ -84,6 +91,9 @@ void handle_udp_input(int udp_fd, int raw_fd,
         return;
     }
     if (n == 0) {
+        if (debug) {
+            std::cout << "[debug] veth1 TX  dropped: zero-length UDP datagram\n";
+        }
         return;
     }
 
