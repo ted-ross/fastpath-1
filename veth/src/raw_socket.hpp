@@ -9,7 +9,7 @@
 struct RawSocket {
     int     fd;
     int     iface_index;
-    uint8_t mac[ETH_ALEN];  // MAC address of veth1
+    uint8_t mac[ETH_ALEN];  // MAC address of veth1's peer interface
 };
 
 /// Open an AF_PACKET raw socket bound to `iface`.

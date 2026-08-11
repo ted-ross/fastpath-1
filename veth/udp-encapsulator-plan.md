@@ -103,20 +103,26 @@ program can send and receive full Ethernet frames on that interface.
   descriptor ready for `recvfrom` / `sendto` using `struct sockaddr_ll`.
 - The socket captures all Ethernet frames (not just IP) — EtherType filtering is done
   in application code.
-- The interface index and MAC address of `veth1` are resolved at startup via `SIOCGIFINDEX`
-  and `SIOCGIFHWADDR` ioctls and stored for later use.
+- The interface index is resolved at startup via `SIOCGIFINDEX` and stored for later use.
+- The MAC address stored in `RawSocket.mac` is the MAC of `veth1`'s **peer** interface,
+  resolved via two `RTM_GETLINK` netlink queries:
+  1. Query veth1's ifindex → parse `IFLA_LINK` to obtain the peer's ifindex.
+  2. Query the peer's ifindex → parse `IFLA_ADDRESS` to obtain the peer's 6-byte MAC.
 
 **Todo List:**
 1. Create `src/raw_socket.hpp` / `src/raw_socket.cpp`.
 2. In `open_raw_socket`: call `socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))`.
 3. Use `ioctl(fd, SIOCGIFINDEX, &ifr)` to get the interface index for `veth1`.
 4. `bind` the socket to a `sockaddr_ll` using the interface index and `ETH_P_ALL`.
-5. Use `ioctl(fd, SIOCGIFHWADDR, &ifr)` to read and store the 6-byte MAC address of
-   `veth1`.
-6. Return the open fd; store the interface index and MAC in a shared context struct.
+5. Open a `NETLINK_ROUTE` socket and call `resolve_peer_mac(iface_index, rs.mac)`:
+   a. Send `RTM_GETLINK` for `iface_index`; walk the `rtattr` list for `IFLA_LINK`
+      to get the peer's ifindex.
+   b. Send a second `RTM_GETLINK` for the peer ifindex; walk for `IFLA_ADDRESS`
+      to get the peer's 6-byte MAC.
+6. Return the open fd; store the interface index and peer MAC in `RawSocket`.
 
 **Relevant Context:** `<linux/if_packet.h>`, `<net/ethernet.h>`, `<sys/ioctl.h>`,
-`<net/if.h>`.
+`<net/if.h>`, `<linux/rtnetlink.h>`, `<linux/if_link.h>`, `<linux/netlink.h>`.
 
 **Status:** [x] done
 
