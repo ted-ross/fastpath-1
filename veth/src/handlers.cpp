@@ -16,6 +16,7 @@
 /// Ethernet header + maximum IPv4 payload within a 1500-byte MTU.
 static constexpr int ETH_FRAME_MAX = 1514;  // 14-byte header + 1500-byte payload
 
+/*
 /// Format a 6-byte MAC address as "xx:xx:xx:xx:xx:xx".
 static std::string mac_to_str(const uint8_t m[ETH_ALEN])
 {
@@ -27,6 +28,7 @@ static std::string mac_to_str(const uint8_t m[ETH_ALEN])
     }
     return os.str();
 }
+*/
 
 // ---------------------------------------------------------------------------
 // Outbound: veth1 → UDP peer
@@ -71,9 +73,9 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
         inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
         inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
         std::cout << "[debug] veth1 RX  " << ip_len << " bytes"
-                  << "  mac-src=" << mac_to_str(eth->h_source)
-                  << " mac-dst=" << mac_to_str(eth->h_dest)
-                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "\n";
+                  //<< "  mac-src=" << mac_to_str(eth->h_source)
+                  //<< " mac-dst=" << mac_to_str(eth->h_dest)
+                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << " proto=" << iph->protocol << "\n";
     }
 
     ssize_t sent = sendto(udp_fd,
@@ -125,9 +127,9 @@ void handle_udp_input(int udp_fd, int raw_fd,
         inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
         inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
         std::cout << "[debug] veth1 TX  " << n << " bytes"
-                  << "  mac-src=" << mac_to_str(eth->h_source)
-                  << " mac-dst=" << mac_to_str(eth->h_dest)
-                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "\n";
+                  //<< "  mac-src=" << mac_to_str(eth->h_source)
+                  //<< " mac-dst=" << mac_to_str(eth->h_dest)
+                  << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << "proto=" << iph->protocol << "\n";
     }
 
     // Addressing for AF_PACKET sendto.
