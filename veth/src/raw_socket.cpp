@@ -127,10 +127,11 @@ static void resolve_peer_mac(int iface_index, uint8_t mac_out[ETH_ALEN])
 
 RawSocket open_raw_socket(const std::string& iface)
 {
-    // Open raw socket that captures all Ethernet frames.
-    int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    // Open DGRAM socket — kernel handles the Ethernet header; payload starts
+    // at the IP header on both send and receive.
+    int fd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
     if (fd < 0) {
-        std::cerr << "error: socket(AF_PACKET): " << std::strerror(errno) << "\n"
+        std::cerr << "error: socket(AF_PACKET, SOCK_DGRAM): " << std::strerror(errno) << "\n"
                   << "       (are you running as root or with CAP_NET_RAW?)\n";
         std::exit(1);
     }
@@ -146,10 +147,10 @@ RawSocket open_raw_socket(const std::string& iface)
     }
     int iface_index = ifr.ifr_ifindex;
 
-    // Bind the socket to this interface.
+    // Bind the socket to this interface, receiving only IPv4 frames.
     struct sockaddr_ll sa{};
     sa.sll_family   = AF_PACKET;
-    sa.sll_protocol = htons(ETH_P_ALL);
+    sa.sll_protocol = htons(ETH_P_IP);
     sa.sll_ifindex  = iface_index;
     if (bind(fd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) < 0) {
         std::cerr << "error: bind(AF_PACKET) on '" << iface << "': "
@@ -159,6 +160,7 @@ RawSocket open_raw_socket(const std::string& iface)
     }
 
     // Resolve the peer's MAC address via netlink IFLA_LINK / IFLA_ADDRESS.
+    // Required so SOCK_DGRAM sendto() can fill the Ethernet destination.
     RawSocket rs{};
     rs.fd          = fd;
     rs.iface_index = iface_index;

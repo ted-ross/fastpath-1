@@ -13,8 +13,8 @@
 #include <net/ethernet.h>
 #include <netinet/ip.h>
 
-/// Ethernet header + maximum IPv4 payload within a 1500-byte MTU.
-static constexpr int ETH_FRAME_MAX = 1514;  // 14-byte header + 1500-byte payload
+/// Maximum IPv4 packet size within a 1500-byte MTU.
+static constexpr int IP_FRAME_MAX = 1500;
 
 /*
 /// Format a 6-byte MAC address as "xx:xx:xx:xx:xx:xx".
@@ -37,7 +37,9 @@ static std::string mac_to_str(const uint8_t m[ETH_ALEN])
 void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
                       bool debug)
 {
-    uint8_t buf[ETH_FRAME_MAX];
+    // With SOCK_DGRAM the kernel strips the Ethernet header; buf holds the IP
+    // packet directly.
+    uint8_t buf[IP_FRAME_MAX];
 
     ssize_t n = recvfrom(raw_fd, buf, sizeof(buf), 0, nullptr, nullptr);
     if (n < 0) {
@@ -46,41 +48,25 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
         }
         return;
     }
-
-    // Need at least the 14-byte Ethernet header plus 1 byte of payload.
-    if (n < static_cast<ssize_t>(sizeof(struct ethhdr) + 1)) {
+    if (n < 1) {
         if (debug) {
-            std::cout << "[debug] veth1 RX  dropped: runt frame (" << n << " bytes)\n";
+            std::cout << "[debug] veth1 RX  dropped: empty packet\n";
         }
         return;
     }
-
-    const auto* eth = reinterpret_cast<const struct ethhdr*>(buf);
-    if (ntohs(eth->h_proto) != ETH_P_IP) {
-        if (debug) {
-            std::cout << "[debug] veth1 RX  dropped: non-IPv4 EtherType 0x"
-                      << std::hex << ntohs(eth->h_proto) << std::dec << "\n";
-        }
-        return;
-    }
-
-    const uint8_t* ip_payload = buf + sizeof(struct ethhdr);
-    ssize_t        ip_len     = n - static_cast<ssize_t>(sizeof(struct ethhdr));
 
     if (debug) {
-        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_payload);
+        const auto* iph = reinterpret_cast<const struct iphdr*>(buf);
         char ipsrc[INET_ADDRSTRLEN], ipdst[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
         inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
-        std::cout << "[debug] veth1 RX  " << ip_len << " bytes"
-                  //<< "  mac-src=" << mac_to_str(eth->h_source)
-                  //<< " mac-dst=" << mac_to_str(eth->h_dest)
+        std::cout << "[debug] veth1 RX  " << n << " bytes"
                   << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << " proto=" << (int)iph->protocol << "\n";
     }
 
     ssize_t sent = sendto(udp_fd,
-                          ip_payload,
-                          static_cast<size_t>(ip_len),
+                          buf,
+                          static_cast<size_t>(n),
                           0,
                           reinterpret_cast<const struct sockaddr*>(&peer),
                           sizeof(peer));
@@ -96,12 +82,11 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
 void handle_udp_input(int udp_fd, int raw_fd,
                       int iface_index, const uint8_t mac[6], bool debug)
 {
-    // Reserve space at the front of the buffer for the Ethernet header.
-    uint8_t buf[ETH_FRAME_MAX];
-    uint8_t* ip_area  = buf + sizeof(struct ethhdr);
-    size_t   ip_space = sizeof(buf) - sizeof(struct ethhdr);
+    // With SOCK_DGRAM the kernel prepends the Ethernet header on send; we only
+    // need to supply the IP packet.
+    uint8_t buf[IP_FRAME_MAX];
 
-    ssize_t n = recvfrom(udp_fd, ip_area, ip_space, 0, nullptr, nullptr);
+    ssize_t n = recvfrom(udp_fd, buf, sizeof(buf), 0, nullptr, nullptr);
     if (n < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             std::cerr << "warn: recvfrom(udp): " << std::strerror(errno) << "\n";
@@ -115,34 +100,27 @@ void handle_udp_input(int udp_fd, int raw_fd,
         return;
     }
 
-    // Build the Ethernet header in-place at the start of the buffer.
-    auto* eth    = reinterpret_cast<struct ethhdr*>(buf);
-    std::memcpy(eth->h_dest,   mac, ETH_ALEN);
-    std::memcpy(eth->h_source, mac, ETH_ALEN);
-    eth->h_proto = htons(ETH_P_IP);
-
     if (debug) {
-        const auto* iph = reinterpret_cast<const struct iphdr*>(ip_area);
+        const auto* iph = reinterpret_cast<const struct iphdr*>(buf);
         char ipsrc[INET_ADDRSTRLEN], ipdst[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &iph->saddr, ipsrc, sizeof(ipsrc));
         inet_ntop(AF_INET, &iph->daddr, ipdst, sizeof(ipdst));
         std::cout << "[debug] veth1 TX  " << n << " bytes"
-                  //<< "  mac-src=" << mac_to_str(eth->h_source)
-                  //<< " mac-dst=" << mac_to_str(eth->h_dest)
                   << "  ip-src=" << ipsrc << " ip-dst=" << ipdst << " proto=" << (int)iph->protocol << "\n";
     }
 
-    // Addressing for AF_PACKET sendto.
+    // Addressing for AF_PACKET SOCK_DGRAM sendto — kernel fills the Ethernet
+    // header using sll_addr as the destination MAC.
     struct sockaddr_ll sa{};
     sa.sll_family   = AF_PACKET;
+    sa.sll_protocol = htons(ETH_P_IP);
     sa.sll_ifindex  = iface_index;
     sa.sll_halen    = ETH_ALEN;
     std::memcpy(sa.sll_addr, mac, ETH_ALEN);
 
-    size_t  frame_len = sizeof(struct ethhdr) + static_cast<size_t>(n);
     ssize_t sent = sendto(raw_fd,
                           buf,
-                          frame_len,
+                          static_cast<size_t>(n),
                           0,
                           reinterpret_cast<struct sockaddr*>(&sa),
                           sizeof(sa));
