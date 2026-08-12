@@ -8,7 +8,8 @@
 #include <cerrno>
 #include <iostream>
 
-#include <sys/epoll.h>
+#include <liburing.h>
+#include <poll.h>
 #include <unistd.h>
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,21 @@ static void install_signal_handlers()
 }
 
 // ---------------------------------------------------------------------------
+// io_uring helpers
+// ---------------------------------------------------------------------------
+
+/// Submit a POLL_ADD SQE that fires when `fd` becomes readable.
+/// `user_data` is set to `fd` so the CQE handler can dispatch without
+/// any additional lookup.
+static void arm_poll(struct io_uring* ring, int fd)
+{
+    struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+    io_uring_prep_poll_add(sqe, fd, POLLIN);
+    io_uring_sqe_set_data64(sqe, static_cast<uint64_t>(fd));
+    io_uring_submit(ring);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -49,59 +65,52 @@ int main(int argc, char* argv[])
 
     install_signal_handlers();
 
-    // Set up epoll.
-    int epfd = epoll_create1(0);
-    if (epfd < 0) {
-        std::cerr << "error: epoll_create1: " << std::strerror(errno) << "\n";
+    // Set up io_uring — queue depth of 4 is ample for two poll entries.
+    struct io_uring ring{};
+    if (io_uring_queue_init(4, &ring, 0) < 0) {
+        std::cerr << "error: io_uring_queue_init: " << std::strerror(errno) << "\n";
         return 1;
     }
 
-    auto add_fd = [&](int fd) {
-        struct epoll_event ev{};
-        ev.events  = EPOLLIN;
-        ev.data.fd = fd;
-        if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-            std::cerr << "error: epoll_ctl(ADD, fd=" << fd << "): "
-                      << std::strerror(errno) << "\n";
-            return false;
-        }
-        return true;
-    };
+    // Arm an initial POLL_ADD for each fd.
+    arm_poll(&ring, raw.fd);
+    arm_poll(&ring, udp.fd);
 
-    if (!add_fd(raw.fd) || !add_fd(udp.fd)) {
-        close(epfd);
-        close(raw.fd);
-        close(udp.fd);
-        return 1;
-    }
-
-    // Event loop.
-    static constexpr int MAX_EVENTS    = 4;
-    static constexpr int EPOLL_TIMEOUT = 500;  // ms — ensures signal check fires promptly
-
-    struct epoll_event events[MAX_EVENTS];
+    // Event loop — wait for a CQE, dispatch, re-arm, repeat.
+    static constexpr long WAIT_NS = 500'000'000L;  // 500 ms — keeps signal check responsive
 
     while (g_running) {
-        int n = epoll_wait(epfd, events, MAX_EVENTS, EPOLL_TIMEOUT);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;  // interrupted by signal — loop will check g_running
-            }
-            std::cerr << "error: epoll_wait: " << std::strerror(errno) << "\n";
+        struct __kernel_timespec ts{ 0, WAIT_NS };
+        struct io_uring_cqe* cqe = nullptr;
+
+        int ret = io_uring_wait_cqe_timeout(&ring, &cqe, &ts);
+        if (ret == -EINTR) {
+            continue;  // interrupted by signal — loop will check g_running
+        }
+        if (ret == -ETIME) {
+            continue;  // timeout — check g_running and wait again
+        }
+        if (ret < 0) {
+            std::cerr << "error: io_uring_wait_cqe_timeout: "
+                      << std::strerror(-ret) << "\n";
             break;
         }
 
-        for (int i = 0; i < n; ++i) {
-            if (events[i].data.fd == raw.fd) {
-                handle_raw_input(raw.fd, udp.fd, udp.peer_addr, cfg.debug);
-            } else if (events[i].data.fd == udp.fd) {
-                handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac, cfg.debug);
-            }
+        int fd = static_cast<int>(io_uring_cqe_get_data64(cqe));
+        io_uring_cqe_seen(&ring, cqe);
+
+        if (fd == raw.fd) {
+            handle_raw_input(raw.fd, udp.fd, udp.peer_addr, cfg.debug);
+        } else if (fd == udp.fd) {
+            handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac, cfg.debug);
         }
+
+        // Re-arm poll for the fd that just fired.
+        arm_poll(&ring, fd);
     }
 
     std::cout << "udp-encap shutting down\n";
-    close(epfd);
+    io_uring_queue_exit(&ring);
     close(udp.fd);
     close(raw.fd);
     return 0;

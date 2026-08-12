@@ -18,3 +18,5 @@ target_compile_options(udp-encap PRIVATE
     -Wextra
     -Wpedantic
 )
+
+target_link_libraries(udp-encap PRIVATE uring)
