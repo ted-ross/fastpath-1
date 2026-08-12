@@ -35,7 +35,8 @@ static std::string mac_to_str(const uint8_t m[ETH_ALEN])
 // ---------------------------------------------------------------------------
 
 void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
-                      bool debug)
+                      bool debug,
+                      unsigned long *if_rx, unsigned long *tun_tx, unsigned long *tun_drop)
 {
     // With SOCK_DGRAM the kernel strips the Ethernet header; buf holds the IP
     // packet directly.
@@ -55,6 +56,8 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
         return;
     }
 
+    (*if_rx)++;
+
     if (debug) {
         const auto* iph = reinterpret_cast<const struct iphdr*>(buf);
         char ipsrc[INET_ADDRSTRLEN], ipdst[INET_ADDRSTRLEN];
@@ -72,6 +75,9 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
                           sizeof(peer));
     if (sent < 0) {
         std::cerr << "warn: sendto(udp peer): " << std::strerror(errno) << "\n";
+        (*tun_drop)++;
+    } else {
+        (*tun_tx)++;
     }
 }
 
@@ -80,7 +86,8 @@ void handle_raw_input(int raw_fd, int udp_fd, const struct sockaddr_in& peer,
 // ---------------------------------------------------------------------------
 
 void handle_udp_input(int udp_fd, int raw_fd,
-                      int iface_index, const uint8_t mac[6], bool debug)
+                      int iface_index, const uint8_t mac[6], bool debug,
+                      unsigned long *if_tx, unsigned long *if_drop, unsigned long *tun_rx)
 {
     // With SOCK_DGRAM the kernel prepends the Ethernet header on send; we only
     // need to supply the IP packet.
@@ -99,6 +106,8 @@ void handle_udp_input(int udp_fd, int raw_fd,
         }
         return;
     }
+
+    (*tun_rx)++;
 
     if (debug) {
         const auto* iph = reinterpret_cast<const struct iphdr*>(buf);
@@ -126,5 +135,8 @@ void handle_udp_input(int udp_fd, int raw_fd,
                           sizeof(sa));
     if (sent < 0) {
         std::cerr << "warn: sendto(raw/veth1): " << std::strerror(errno) << "\n";
+        (*if_drop)++;
+    } else {
+        (*if_tx)++;
     }
 }

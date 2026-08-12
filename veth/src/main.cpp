@@ -17,6 +17,13 @@
 
 static volatile sig_atomic_t g_running = 1;
 
+static unsigned long if_rx    = 0;
+static unsigned long if_tx    = 0;
+static unsigned long if_drop  = 0;
+static unsigned long tun_rx   = 0;
+static unsigned long tun_tx   = 0;
+static unsigned long tun_drop = 0;
+
 static void on_signal(int /*sig*/)
 {
     g_running = 0;
@@ -93,14 +100,22 @@ int main(int argc, char* argv[])
 
         for (int i = 0; i < n; ++i) {
             if (events[i].data.fd == raw.fd) {
-                handle_raw_input(raw.fd, udp.fd, udp.peer_addr, cfg.debug);
+                handle_raw_input(raw.fd, udp.fd, udp.peer_addr, cfg.debug,
+                    &if_rx, &tun_tx, &tun_drop);
             } else if (events[i].data.fd == udp.fd) {
-                handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac, cfg.debug);
+                handle_udp_input(udp.fd, raw.fd, raw.iface_index, raw.mac, cfg.debug,
+                    &if_tx, &if_drop, &tun_rx);
             }
         }
     }
 
-    std::cout << "udp-encap shutting down\n";
+    std::cout << "udp-encap shutting down\n\n";
+    std::cout << "Interface: tx = " << if_tx << "\n";
+    std::cout << "           rx = " << if_rx << "\n";
+    std::cout << "         drop = " << if_drop << "\n";
+    std::cout << "Tunnel:    tx = " << tun_tx << "\n";
+    std::cout << "           rx = " << tun_rx << "\n";
+    std::cout << "         drop = " << tun_drop << "\n";
     close(epfd);
     close(udp.fd);
     close(raw.fd);
